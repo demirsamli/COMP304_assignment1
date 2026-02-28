@@ -306,6 +306,45 @@ int prompt(struct command_t *command) {
   return SUCCESS;
 }
 
+/*
+  We need a helper function to resolve command name to full path.
+  We are going to do that by searching for PATH.
+  If the command contains '/', then it'll be treated as a path and will be used directly.
+  If the path isn't found, it returns NULL; otherwise, it returns the full path.
+  At the end, the returned string is freed.
+*/
+
+char *res_cmd_path(const char *command){
+  // 1) We start by declaring variables ('char *' to imply a sequence of characters in C) that will be used later on.
+  char *path_copy;
+  char *dir;
+  char *full_path;
+  size_t path_len;
+
+  // 2) If command has '/', treat it as a path.
+  // We can make sure of this since in Unix, '/' is the directory separator. It can't be present inside a filename.
+  // For loop to look for '/' in command.
+  int has_slash = 0;
+  for (int i = 0; command[i] != '\0'; i++) {
+    if (command[i] == '/') {
+      has_slash = 1;
+      break;
+    }
+  }
+  // If '/' present, we treat it as path.
+  if (has_slash) {
+    // Returns 0 if the file exists & we have execute permission, -1 otherwise.
+    if (access(command, X_OK) == 0){
+      // If the file exists and we have execute permission; allocate a new block of memory, copy the string 'command' to it
+      // and return a pointer to that copy. => This can easily done via the 'strdup' function.
+      return strdup(command);
+    }
+    // In case where access returns -1, we return NULL.
+    return NULL;
+  
+  }
+}
+
 int process_command(struct command_t *command) {
   int r;
   if (strcmp(command->name, "") == 0)
