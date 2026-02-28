@@ -339,6 +339,7 @@ char *res_cmd_path(const char *command){
       // and return a pointer to that copy. => This can easily done via the 'strdup' function.
       return strdup(command);
     }
+  }
     // In case where access returns -1, we return NULL.
     return NULL;
   
@@ -361,10 +362,32 @@ char *res_cmd_path(const char *command){
     // We have to learn the length in order to reserve the right amount of memory for 'full_path' that is going to be created.
     // The number of bytes we need is length of 'dir' + 1 for '/' + length of 'command' + 1 for the null terminator '\0'.
     path_len = strlen(dir) + 1 + strlen(command) + 1;
-    
+    // Now, we need to allocate as much memory as path_len by 'malloc'.
+    full_path = (char *)malloc(path_len);
+    // If 'malloc' returns NULL (it can't allocate the needed memory), we need to free the allocated memory for 'path_copy'.
+    // That's done in order to prevent memory leak.
+    if (full_path == NULL) {
+      free(path_copy);
+      return NULL;
+    }
+    // In case where we successfully allocated the memory we need for the 'full_path', we have to actually place it.
+    // This process could be done with 'snprintf' function where it receives the pointer to the buffer, the max number of
+    // bytes, and the format (in this case "%s/%s", 'dir' to replace the first 's', and command to replace the second 's')
+    snprintf(full_path, path_len, "%s/%s", dir, command);
+    // At this point, the allocated memory for 'full_path' actually holds the string for full path.
+    // Now, we have to check 'access' as we did before.
+    if (access(full_path, X_OK) == 0) {
+      free(path_copy);
+      return full_path;
+    }
+    // We free the memory to prevent memory leaks.
+    free(full_path);
+    dir = strtok(NULL, ":");
 
   }
-  }
+  // We free the memory to prevent memory leaks.
+  free(path_copy);
+  return NULL;
 }
 
 int process_command(struct command_t *command) {
