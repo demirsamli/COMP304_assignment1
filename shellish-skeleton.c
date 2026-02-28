@@ -331,7 +331,7 @@ char *res_cmd_path(const char *command){
       break;
     }
   }
-  // If '/' present, we treat it as path.
+  // If '/' present, we treat it as a path.
   if (has_slash) {
     // Returns 0 if the file exists & we have execute permission, -1 otherwise.
     if (access(command, X_OK) == 0){
@@ -342,6 +342,28 @@ char *res_cmd_path(const char *command){
     // In case where access returns -1, we return NULL.
     return NULL;
   
+  // In case has_slash == -1; we get the path and work with it using 'copy_path' to avoid confusions.
+  // We also do NULL checks to make sure.
+  char *path_env = getenv("PATH");
+  if (path_env == NULL)
+    return NULL;
+
+  path_copy = strdup(path_env);
+  if (path_copy == NULL)
+    return NULL;
+
+  // After initializing 'copy_path' efficiently, we divide PATH into directories since it's a list of directories itself
+  // We do this to find where the actual command lies.
+  // PATH can be separated to it's directories by 'strtok', using colon as the separation factor.
+  dir = strtok(path_copy, ":");
+  // We try out each directory to find the one we are looking for.
+  while (dir != NULL){
+    // We have to learn the length in order to reserve the right amount of memory for 'full_path' that is going to be created.
+    // The number of bytes we need is length of 'dir' + 1 for '/' + length of 'command' + 1 for the null terminator '\0'.
+    path_len = strlen(dir) + 1 + strlen(command) + 1;
+    
+
+  }
   }
 }
 
