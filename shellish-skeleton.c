@@ -478,6 +478,34 @@ void run_pipeline(struct command_t *command, int stdin_file_descriptor, int wait
     }
     return;
   }
+  /* More commands: create pipe, run this command with stdout -> pipe, recurse for rest */
+  int pipe_fd[2];
+  if (pipe(pipe_fd) == -1) {
+    perror("pipe");
+    if (stdin_file_descriptor >= 0)
+      close(stdin_file_descriptor);
+    return;
+  }
+  pid_t pid = fork();
+  if (pid == 0) {
+    if (stdin_file_descriptor >= 0) {
+      dup2(stdin_file_descriptor, STDIN_FILENO);
+      close(stdin_file_descriptor);
+    }
+    dup2(pipe_fd[1], STDOUT_FILENO);
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+    io_redirection(command);
+    run_exec(command);
+    exit(127);
+  }
+  if (stdin_file_descriptor >= 0)
+    close(stdin_file_descriptor);
+  close(pipe_fd[1]);
+  run_pipeline(command->next, pipe_fd[0], wait);
+  close(pipe_fd[0]);
+  if (wait)
+    waitpid(pid, NULL, 0);
 }
 
 
@@ -499,10 +527,16 @@ int process_command(struct command_t *command) {
     }
   }
 
+  /* Part 2: pipeline (cmd1 | cmd2 | ...) — run it and return */
+  if (command->next != NULL) {
+    run_pipeline(command, -1, !command->background);
+    return SUCCESS;
+  }
 
   pid_t pid = fork();
   if (pid == 0) // child
-  { 
+  {
+    io_redirection(command);  /* Part 2: apply <, >, >> */
     // This shows how to do exec with environ (but is not available on MacOs)
     // extern char** environ; // environment variables
     // execvpe(command->name, command->args, environ); // exec+args+path+environ
