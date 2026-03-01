@@ -339,9 +339,10 @@ char *res_cmd_path(const char *command){
       // and return a pointer to that copy. => This can easily done via the 'strdup' function.
       return strdup(command);
     }
-  }
     // In case where access returns -1, we return NULL.
     return NULL;
+  }
+    
   
   // In case has_slash == -1; we get the path and work with it using 'copy_path' to avoid confusions.
   // We also do NULL checks to make sure.
@@ -419,7 +420,7 @@ int process_command(struct command_t *command) {
     // as required by exec
 
     // TODO: do your own exec with path resolving using execv()
-    char *full_path = resolve_command_path(command->name);
+    char *full_path = res_cmd_path(command->name);
     if (full_path != NULL) {
       // Replace the current process with a new program
       execv(full_path, command->args);
