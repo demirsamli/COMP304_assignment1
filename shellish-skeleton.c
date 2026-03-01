@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <termios.h> // termios, TCSANOW, ECHO, ICANON
 #include <unistd.h>
+
 const char *sysname = "shellish";
 
 enum return_codes {
@@ -391,6 +392,102 @@ char *res_cmd_path(const char *command){
   return NULL;
 }
 
+/* Apply I/O redirection in the child: redirects[0]=stdin, [1]=stdout overwrite, [2]=stdout append */
+static void apply_redirects(struct command_t *command) {
+  extern int open(const char *pathname, int flags, ...);
+  int shell_o_rdonly = 0, shell_o_wronly = 1, shell_o_creat = 64, shell_o_trunc = 512, shell_o_append = 1024;
+  int fd;
+  if (command->redirects[0] != NULL) {
+    fd = open(command->redirects[0], shell_o_rdonly);
+    if (fd == -1) {
+      fprintf(stderr, "-%s: %s: %s\n", sysname, command->redirects[0], strerror(errno));
+      exit(1);
+    }
+    dup2(fd, STDIN_FILENO);
+    close(fd);
+  }
+  if (command->redirects[1] != NULL) {
+    fd = open(command->redirects[1], shell_o_wronly | shell_o_creat | shell_o_trunc, 0644);
+    if (fd == -1) {
+      fprintf(stderr, "-%s: %s: %s\n", sysname, command->redirects[1], strerror(errno));
+      exit(1);
+    }
+    dup2(fd, STDOUT_FILENO);
+    close(fd);
+  }
+  if (command->redirects[2] != NULL) {
+    fd = open(command->redirects[2], shell_o_wronly | shell_o_creat | shell_o_append, 0644);
+    if (fd == -1) {
+      fprintf(stderr, "-%s: %s: %s\n", sysname, command->redirects[2], strerror(errno));
+      exit(1);
+    }
+    dup2(fd, STDOUT_FILENO);
+    close(fd);
+  }
+}
+
+static void run_exec(struct command_t *command);
+
+/* Last command in pipeline: run one process with optional stdin and redirects */
+static void run_pipeline_with_stdin(struct command_t *command, int stdin_fd, int wait_for_children) {
+  if (command == NULL)
+    return;
+  if (command->next == NULL) {
+    pid_t pid = fork();
+    if (pid == 0) {
+      if (stdin_fd >= 0) {
+        dup2(stdin_fd, STDIN_FILENO);
+        close(stdin_fd);
+      }
+      apply_redirects(command);
+      run_exec(command);
+      exit(127);
+    }
+    if (stdin_fd >= 0)
+      close(stdin_fd);
+    if (wait_for_children)
+      waitpid(pid, NULL, 0);
+    return;
+  }
+  int pipe_fd[2];
+  if (pipe(pipe_fd) == -1) {
+    perror("pipe");
+    if (stdin_fd >= 0)
+      close(stdin_fd);
+    return;
+  }
+  pid_t pid = fork();
+  if (pid == 0) {
+    if (stdin_fd >= 0) {
+      dup2(stdin_fd, STDIN_FILENO);
+      close(stdin_fd);
+    }
+    dup2(pipe_fd[1], STDOUT_FILENO);
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+    apply_redirects(command);
+    run_exec(command);
+    exit(127);
+  }
+  if (stdin_fd >= 0)
+    close(stdin_fd);
+  close(pipe_fd[1]);
+  run_pipeline_with_stdin(command->next, pipe_fd[0], wait_for_children);
+  close(pipe_fd[0]);
+  if (wait_for_children)
+    waitpid(pid, NULL, 0);
+}
+
+static void run_exec(struct command_t *command) {
+  char *full_path = res_cmd_path(command->name);
+  if (full_path != NULL) {
+    execv(full_path, command->args);
+    free(full_path);
+  }
+  fprintf(stderr, "-%s: %s: command not found\n", sysname, command->name);
+  exit(127);
+}
+
 int process_command(struct command_t *command) {
   int r;
   if (strcmp(command->name, "") == 0)
@@ -408,9 +505,17 @@ int process_command(struct command_t *command) {
     }
   }
 
+  // Part 2: pipeline (cmd1 | cmd2 | ...) — run it and return
+  if (command->next != NULL) {
+    run_pipeline_with_stdin(command, -1, !command->background);
+    return SUCCESS;
+  }
+
   pid_t pid = fork();
   if (pid == 0) // child
   {
+    apply_redirects(command);  // Part 2: <, >, >>
+
     /// This shows how to do exec with environ (but is not available on MacOs)
     // extern char** environ; // environment variables
     // execvpe(command->name, command->args, environ); // exec+args+path+environ
