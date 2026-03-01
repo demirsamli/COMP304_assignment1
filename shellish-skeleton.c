@@ -478,34 +478,35 @@ void run_pipeline(struct command_t *command, int stdin_file_descriptor, int wait
     }
     return;
   }
-  /* More commands: create pipe, run this command with stdout -> pipe, recurse for rest */
-  int pipe_fd[2];
-  if (pipe(pipe_fd) == -1) {
+  // Case where we have more commands coming in the pipeline.
+  int pipe_file_descriptors[2]; // two file descriptors: one to read from the pipe, one to write to it.
+  if (pipe(pipe_file_descriptors) == -1) { // create the pipe and fill: pipe_file_descriptors[0]: read end, pipe_file_descriptors[1]: write end
     perror("pipe");
     if (stdin_file_descriptor >= 0)
       close(stdin_file_descriptor);
     return;
   }
-  pid_t pid = fork();
-  if (pid == 0) {
-    if (stdin_file_descriptor >= 0) {
-      dup2(stdin_file_descriptor, STDIN_FILENO);
+  pid_t process_id = fork(); // Again, create a new child process
+  if (process_id == 0) { // run only in child
+    if (stdin_file_descriptor >= 0) { // same check as before
+      dup2(stdin_file_descriptor, STDIN_FILENO); // make file_descriptor 0 point to the same open file as file_descriptor
       close(stdin_file_descriptor);
     }
-    dup2(pipe_fd[1], STDOUT_FILENO);
-    close(pipe_fd[0]);
-    close(pipe_fd[1]);
-    io_redirection(command);
-    run_exec(command);
+    dup2(pipe_file_descriptors[1], STDOUT_FILENO); // Makes fd 1 (stdout) point to the write end of the new pipe
+    close(pipe_file_descriptors[0]); // close the read end of the pipe in the child
+    close(pipe_file_descriptors[1]); // close the write end of the pipe in the child
+    io_redirection(command); // apply any file redirections for this command ('<', '>', '>>')
+    run_exec(command); // run the actual program
     exit(127);
   }
   if (stdin_file_descriptor >= 0)
     close(stdin_file_descriptor);
-  close(pipe_fd[1]);
-  run_pipeline(command->next, pipe_fd[0], wait);
-  close(pipe_fd[0]);
+  close(pipe_file_descriptors[1]);
+  run_pipeline(command->next, pipe_file_descriptors[0], wait); // recursive call to run the rest of the pipeline
+  close(pipe_file_descriptors[0]);
   if (wait)
-    waitpid(pid, NULL, 0);
+    waitpid(process_id, NULL, 0);
+
 }
 
 
@@ -527,7 +528,7 @@ int process_command(struct command_t *command) {
     }
   }
 
-  /* Part 2: pipeline (cmd1 | cmd2 | ...) — run it and return */
+  // For part 2: running the pipeline efficiently.
   if (command->next != NULL) {
     run_pipeline(command, -1, !command->background);
     return SUCCESS;
@@ -535,8 +536,10 @@ int process_command(struct command_t *command) {
 
   pid_t pid = fork();
   if (pid == 0) // child
-  {
-    io_redirection(command);  /* Part 2: apply <, >, >> */
+  { 
+    // Apply part 2: I/O redirection
+    io_redirection(command);
+    
     // This shows how to do exec with environ (but is not available on MacOs)
     // extern char** environ; // environment variables
     // execvpe(command->name, command->args, environ); // exec+args+path+environ
