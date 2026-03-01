@@ -430,9 +430,9 @@ void io_redirection(struct command_t *command){ // 'command' is a pointer to a c
     close(file_descriptor);
   }
 
-  // Case 2: The user has included '>>'.
+  // Case 3: The user has included '>>'.
   if ((*command).redirects[2] != NULL){
-    file_descriptor = open((*command).redirects[1], shell_o_wronly | shell_o_creat | shell_o_append, 0644);
+    file_descriptor = open((*command).redirects[2], shell_o_wronly | shell_o_creat | shell_o_append, 0644);
     if (file_descriptor == -1){
       exit(1);
     }
@@ -442,6 +442,68 @@ void io_redirection(struct command_t *command){ // 'command' is a pointer to a c
 
 }
 
+/* Part 2: run the actual program (path resolve + execv). Used by pipeline children. */
+static void run_exec(struct command_t *command) {
+  char *full_path = res_cmd_path(command->name);
+  if (full_path != NULL) {
+    execv(full_path, command->args);
+    free(full_path);
+  }
+  fprintf(stderr, "-%s: %s: command not found\n", sysname, command->name);
+  exit(127);
+}
+
+/* Part 2: run a pipeline (cmd1 | cmd2 | ...). Recursively forks and connects with pipes. */
+static void run_pipeline_with_stdin(struct command_t *command, int stdin_fd, int wait_for_children) {
+  if (command == NULL)
+    return;
+  if (command->next == NULL) {
+    /* Last command: run one process, stdin from pipe (if any), then redirects and exec */
+    pid_t pid = fork();
+    if (pid == 0) {
+      if (stdin_fd >= 0) {
+        dup2(stdin_fd, STDIN_FILENO);
+        close(stdin_fd);
+      }
+      io_redirection(command);
+      run_exec(command);
+      exit(127);
+    }
+    if (stdin_fd >= 0)
+      close(stdin_fd);
+    if (wait_for_children)
+      waitpid(pid, NULL, 0);
+    return;
+  }
+  /* More commands: create pipe, run this command with stdout -> pipe, recurse for rest */
+  int pipe_fd[2];
+  if (pipe(pipe_fd) == -1) {
+    perror("pipe");
+    if (stdin_fd >= 0)
+      close(stdin_fd);
+    return;
+  }
+  pid_t pid = fork();
+  if (pid == 0) {
+    if (stdin_fd >= 0) {
+      dup2(stdin_fd, STDIN_FILENO);
+      close(stdin_fd);
+    }
+    dup2(pipe_fd[1], STDOUT_FILENO);
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+    io_redirection(command);
+    run_exec(command);
+    exit(127);
+  }
+  if (stdin_fd >= 0)
+    close(stdin_fd);
+  close(pipe_fd[1]);
+  run_pipeline_with_stdin(command->next, pipe_fd[0], wait_for_children);
+  close(pipe_fd[0]);
+  if (wait_for_children)
+    waitpid(pid, NULL, 0);
+}
 
 int process_command(struct command_t *command) {
   int r;
@@ -460,10 +522,16 @@ int process_command(struct command_t *command) {
     }
   }
 
+  /* Part 2: pipeline (cmd1 | cmd2 | ...) */
+  if (command->next != NULL) {
+    run_pipeline_with_stdin(command, -1, !command->background);
+    return SUCCESS;
+  }
 
   pid_t pid = fork();
   if (pid == 0) // child
-  { 
+  {
+    io_redirection(command);  /* Part 2: apply <, >, >> */
     // This shows how to do exec with environ (but is not available on MacOs)
     // extern char** environ; // environment variables
     // execvpe(command->name, command->args, environ); // exec+args+path+environ
